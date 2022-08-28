@@ -574,7 +574,7 @@ class AutoReseed
                 $reseed_infohash = $value['info_hash'];  // 种子infohash
                 // 检查禁用站点
                 if (empty(self::$sites[$sid])) {
-                    echo '-----当前站点不受支持，已跳过。sid:'. $sid .PHP_EOL.PHP_EOL;
+                    //echo '-----当前站点不受支持，已跳过。sid:'. $sid .PHP_EOL.PHP_EOL;
                     self::$wechatMsg['reseedSkip']++;
                     continue;
                 }
@@ -602,6 +602,8 @@ class AutoReseed
                 if (!self::reseedCheck($clientKey, $value, $hashString, $downloadDir, $_url)) {
                     continue;
                 }
+                
+                $seedIsPush = false;
                 /**
                  * 种子推送方式区分
                  */
@@ -614,6 +616,7 @@ class AutoReseed
                     $userAgent = empty(self::$conf['default']['ua']) ? Constant::UserAgent : self::$conf['default']['ua'];
                     switch ($siteName) {
                         case 'hdchina':
+                            $seedIsPush = true;
                             // 请求详情页
                             $details_html = self::getNexusPHPdetailsPage($protocol, $value, $cookie, $userAgent);
                             if (is_null($details_html)) {
@@ -658,6 +661,7 @@ class AutoReseed
                             }
                             break;
                         case 'hdcity':
+                            $seedIsPush = true;
                             $details_url = $protocol . self::$sites[$sid]['base_url'] . '/t-' .$torrent_id;
                             print "种子详情页：".$details_url.PHP_EOL;
                             if (empty(self::$_sites[$siteName]['cuhash'])) {
@@ -694,10 +698,19 @@ class AutoReseed
                             }
                             break;
                         case 'hdsky':
+                            $seedIsPush = true;
                             // 请求详情页
                             $details_html = self::getNexusPHPdetailsPage($protocol, $value, $cookie, $userAgent);
                             if (is_null($details_html)) {
                                 $reseedPass = true;
+                                break;
+                            }
+                            if (strpos($details_html, '限制访问本功能') !== false) {
+                                self::$_sites[$siteName]['limit'] = 1;
+                                $reseedPass = true;
+
+                                echo "当前站点触发限制访问种子列表，已加入流控列表".PHP_EOL;
+                                self::ff($siteName. '站点，辅种时限制访问种子列表！');
                                 break;
                             }
                             // 搜索种子地址
@@ -724,6 +737,14 @@ class AutoReseed
                                     echo "请进入种子详情页，下载种子，成功后更新cookie！".PHP_EOL;
                                     sleepIYUU(30, '请进入种子详情页，下载种子，成功后更新cookie！');
                                     self::ff($siteName. '站点，辅种时触发第一次下载提示！');
+                                }
+                                else if (strpos($url, '小时') !== false) {
+                                    self::$_sites[$siteName]['limit'] = 1;
+                                    $reseedPass = true;
+
+                                    echo "当前站点触发禁止下载".PHP_EOL;
+                                    self::ff($siteName. '站点，辅种时触发禁止下载！');
+                                    break;
                                 }
                             } else {
                                 $reseedPass = true;
@@ -769,6 +790,17 @@ class AutoReseed
                     // 保存当前客户端辅种的INFOHASH
                     self::$links[$clientKey]['reseed_infohash'][] = $reseed_infohash;
                 } else {
+                    if ($seedIsPush) {
+                      // 如果是iyuu下载种子并push的，则add失败也增加流控
+                      // 操作流控参数
+                      if (isset(self::$_sites[$siteName]['limitRule']) && self::$_sites[$siteName]['limitRule']) {
+                          $limitRule = self::$_sites[$siteName]['limitRule'];
+                          if ($limitRule['count']) {
+                              self::$_sites[$siteName]['limitRule']['count']--;
+                              self::$_sites[$siteName]['limitRule']['time'] = time();
+                          }
+                      }
+                    }
                     // 失败
                     static::wLog($log, 'reseedError');
                     // 失败累加
@@ -844,31 +876,31 @@ class AutoReseed
         if ($reseed_check && is_array($reseed_check)) {
             // 循环检查所有项目
             foreach ($reseed_check as $item) {
-                echo "clients_".$k."【".self::$links[$k]['_config']['name']."】正在循环检查所有项目... {$siteName}".PHP_EOL;
                 $item = ($item === 'uid' ? 'id' : $item);   // 兼容性处理【用户的user_id在配置项内是id】
                 if (empty(self::$_sites[$siteName]) || empty(self::$_sites[$siteName][$item])) {
                     $msg =  '-------因当前' .$siteName. "站点未设置".$item."，已跳过！！【如果确实已设置，请检查辅种任务，是否勾选{$siteName}站点】".PHP_EOL.PHP_EOL;
-                    echo $msg;
+                    //echo $msg;
                     self::$wechatMsg['reseedSkip']++;
                     return false;
                 }
+                echo "clients_".$k."【".self::$links[$k]['_config']['name']."】正在循环检查所有项目... {$siteName}".PHP_EOL;
             }
         }
         // 重复做种检测
         if (isset($infohash_Dir[$info_hash])) {
-            echo '-------与客户端现有种子重复：'.$_url.PHP_EOL.PHP_EOL;
+            //echo '-------与客户端现有种子重复：'.$_url.PHP_EOL.PHP_EOL;
             self::$wechatMsg['reseedRepeat']++;
             return false;
         }
         // 历史添加检测
         if (is_file(self::$cacheHash . $info_hash.'.txt')) {
-            echo '-------当前种子上次辅种已成功添加【'.self::$cacheHash . $info_hash.'】，已跳过！ '.$_url.PHP_EOL.PHP_EOL;
+            //echo '-------当前种子上次辅种已成功添加【'.self::$cacheHash . $info_hash.'】，已跳过！ '.$_url.PHP_EOL.PHP_EOL;
             self::$wechatMsg['reseedPass']++;
             return false;
         }
         // 检查站点是否可以辅种
         if (in_array($siteName, self::$noReseed)) {
-            echo '-------已跳过不辅种的站点：'.$_url.PHP_EOL.PHP_EOL;
+            //echo '-------已跳过不辅种的站点：'.$_url.PHP_EOL.PHP_EOL;
             self::$wechatMsg['reseedPass']++;
             // 写入日志文件，供用户手动辅种
             static::wLog('clients_'.$k."【".self::$links[$k]['_config']['name']."】".PHP_EOL.$downloadDir.PHP_EOL.$_url.PHP_EOL.PHP_EOL, $siteName);
